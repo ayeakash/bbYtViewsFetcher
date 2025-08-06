@@ -7,6 +7,14 @@ from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 import gspread, gspread.utils as gsu
 from tqdm import tqdm
+from datetime import datetime, timezone, timedelta
+
+# IST is UTC+5:30
+IST = timezone(timedelta(hours=5, minutes=30))
+
+def make_header():
+    """Return e.g. 'Views 2025-08-06 01:00' in IST."""
+    return datetime.now(IST).strftime("Views %Y-%m-%d %H:%M")
 
 # ========== 1. Read env vars ==========
 SPREADSHEET_ID = os.environ["SPREADSHEET_ID"]
@@ -35,7 +43,7 @@ def fetch_views(ids):
 HEADER_ROW      = 1      # titles row
 ID_COL          = 2      # column B
 NEW_COL_FIXED   = None   # or 3 to always use column C
-HEADER_LABEL    = "Views"
+
 YT_BATCH_SIZE   = 50
 YT_QPS          = 9
 
@@ -78,7 +86,7 @@ for ws in ss.worksheets():
         rng_out   = f"{top_left}:{bottom}"
         
         # 2) Build a value for *every* row, preserving gaps
-        values = [[HEADER_LABEL]]                    # header cell
+        values = [[make_header()]]                    # header cell
         for v in col[HEADER_ROW:]:                   # original column slice (incl. '')
             vid = v.strip()
             values.append([view_map.get(vid, "") if vid else ""])
