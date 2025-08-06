@@ -62,17 +62,29 @@ for ws in ss.worksheets():
         if (idx + 1) % YT_QPS == 0:
             time.sleep(1.1)
 
-    # --- write back ---
-    dest_col = NEW_COL_FIXED or len(ws.row_values(HEADER_ROW)) + 1
-    top_left = gsu.rowcol_to_a1(HEADER_ROW, dest_col)
-    bottom   = gsu.rowcol_to_a1(HEADER_ROW + len(ids), dest_col)
-    rng_out  = f"{top_left}:{bottom}"
-    values   = [[HEADER_LABEL]] + [[view_map.get(v, "")] for v in ids]
-    ws.batch_update([{"range": rng_out, "values": values}])
-    total_sheet += 1
+        # ----- WRITE results  (1 Sheets call) -----
+        # 1) How many physical rows exist in the column (incl. blanks)?
+        col_len   = len(col)                         # col came from ws.col_values()
+        data_rows = col_len - HEADER_ROW             # rows below the header
+        
+        dest_col  = NEW_COL_FIXED or len(ws.row_values(HEADER_ROW)) + 1
+        
+        top_left  = gsu.rowcol_to_a1(HEADER_ROW, dest_col)
+        bottom    = gsu.rowcol_to_a1(HEADER_ROW + data_rows, dest_col)
+        rng_out   = f"{top_left}:{bottom}"
+        
+        # 2) Build a value for *every* row, preserving gaps
+        values = [[HEADER_LABEL]]                    # header cell
+        for v in col[HEADER_ROW:]:                   # original column slice (incl. '')
+            vid = v.strip()
+            values.append([view_map.get(vid, "") if vid else ""])
+        
+        ws.batch_update([{"range": rng_out, "values": values}])
+        total_sheet_calls += 1
+        
+        col_letter = ''.join(filter(str.isalpha, gsu.rowcol_to_a1(1, dest_col)))
+        print(f"   ✔ {len(ids):>4} IDs written to column {col_letter}")
 
-    col_letter = ''.join(filter(str.isalpha, gsu.rowcol_to_a1(1, dest_col)))
-    print(f"   ✔ {len(ids):>4} IDs → column {col_letter}")
 
 print(f"\nYouTube calls : {total_yt}")
 print(f"Sheets calls  : {total_sheet}")
