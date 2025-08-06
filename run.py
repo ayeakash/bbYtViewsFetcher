@@ -41,6 +41,10 @@ YT_QPS          = 9
 
 total_yt, total_sheet = 0, 0
 
+# track how many API calls we make
+total_sheet_calls = 0
+total_yt_calls    = 0
+
 # ========== 4. Loop sheets ==========
 for ws in ss.worksheets():
     print(f"\n▶  {ws.title}")
