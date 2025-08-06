@@ -1,0 +1,5 @@
+gspread==5.*
+google-auth
+google-api-python-client
+tqdm
+nest_asyncio
