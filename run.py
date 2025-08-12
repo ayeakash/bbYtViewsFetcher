@@ -2,7 +2,8 @@
 # run.py — weekly YouTube-views updater
 # ------------------------------------
 # • ONE new “Views YYYY-MM-DD HH:MM” column per worksheet.
-# • Auto-expands sheet width if needed.
+# • Places it immediately right of the last non-empty header.
+# • Auto-expands sheet width only if needed.
 # • Read-quota back-off + per-sheet throttle.
 # • Final success/error summary.
 
@@ -19,14 +20,13 @@ from googleapiclient.errors import HttpError
 import gspread
 import gspread.utils as gsu
 
-
 # ──────────────────────────────────────────────────────────────────────────────
 # 1. CONSTANTS & HELPERS
 # ──────────────────────────────────────────────────────────────────────────────
 IST = timezone(timedelta(hours=5, minutes=30))          # India Standard Time
 HEADER_ROW        = 1
-ID_COL            = 2                                   # column B
-NEW_COL_FIXED     = None                                # or 3 to always use C
+ID_COL            = 2                                   # column B (video IDs)
+NEW_COL_FIXED     = None                                # or an int (e.g., 3 for column C)
 YT_BATCH_SIZE     = 50
 YT_QPS            = 9
 SHEET_DELAY_SECS  = 1.5                                 # throttle Sheets reads
@@ -34,7 +34,6 @@ MAX_READ_RETRIES  = 3                                   # for 429s
 
 def make_header() -> str:
     return datetime.now(IST).strftime("Views %Y-%m-%d %H:%M")
-
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 2. ENV & AUTH
@@ -54,29 +53,42 @@ gc  = gspread.authorize(creds)
 ss  = gc.open_by_key(SPREADSHEET_ID)
 yt  = build("youtube", "v3", developerKey=YT_API_KEY)
 
-
 # ──────────────────────────────────────────────────────────────────────────────
 # 3. UTILS
 # ──────────────────────────────────────────────────────────────────────────────
 def yt_fetch_views(ids: list[str]) -> dict[str, int]:
     """Return {video_id: viewCount} for ≤ 50 ids (costs 1 quota unit)."""
     resp = yt.videos().list(id=",".join(ids), part="statistics").execute()
-    return {item["id"]: int(item["statistics"]["viewCount"])
-            for item in resp.get("items", [])}
+    return {
+        item["id"]: int(item["statistics"]["viewCount"])
+        for item in resp.get("items", [])
+    }
 
 def safe_col_values(ws: gspread.Worksheet, col_index: int) -> list[str]:
     """Read a column with exponential back-off on 429 quota errors."""
     for attempt in range(1, MAX_READ_RETRIES + 1):
         try:
-            return ws.col_values(col_index)            # one read call
+            return ws.col_values(col_index)  # one read call
         except HttpError as err:
-            if err.resp.status == 429 and attempt < MAX_READ_RETRIES:
+            if getattr(err, "resp", None) and err.resp.status == 429 and attempt < MAX_READ_RETRIES:
                 wait = 30 * attempt
                 print(f"   ⏳ Hit Sheets read-quota (429). Sleeping {wait}s …")
                 time.sleep(wait)
             else:
                 raise
 
+def safe_row_values(ws: gspread.Worksheet, row_index: int) -> list[str]:
+    """Read a row with exponential back-off on 429 quota errors."""
+    for attempt in range(1, MAX_READ_RETRIES + 1):
+        try:
+            return ws.row_values(row_index)  # trims trailing empties
+        except HttpError as err:
+            if getattr(err, "resp", None) and err.resp.status == 429 and attempt < MAX_READ_RETRIES:
+                wait = 30 * attempt
+                print(f"   ⏳ Hit Sheets read-quota (429). Sleeping {wait}s …")
+                time.sleep(wait)
+            else:
+                raise
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 4. MAIN
@@ -96,17 +108,25 @@ for ws in ss.worksheets():
             time.sleep(SHEET_DELAY_SECS)
             continue
 
-        # --- choose destination column --------------------------------------
-        dest_col = NEW_COL_FIXED or ws.col_count + 1       # only metadata read
-        if dest_col > ws.col_count:                        # expand if necessary
+        # --- choose destination column: next to last non-empty header --------
+        if NEW_COL_FIXED:
+            dest_col = int(NEW_COL_FIXED)
+        else:
+            header_cells = [c.strip() for c in safe_row_values(ws, HEADER_ROW)]
+            last_used_col = len(header_cells)           # row_values trims tail
+            dest_col = last_used_col + 1
+
+        # expand only if truly needed
+        if dest_col > ws.col_count:
             ws.add_cols(dest_col - ws.col_count)
 
         # --- gather view counts (may need several API calls) -----------------
         view_map = {}
         for idx, start in enumerate(range(0, len(ids), YT_BATCH_SIZE)):
             chunk = ids[start : start + YT_BATCH_SIZE]
-            view_map.update(yt_fetch_views(chunk))
-            total_yt_calls += 1
+            if chunk:
+                view_map.update(yt_fetch_views(chunk))
+                total_yt_calls += 1
             if (idx + 1) % YT_QPS == 0:
                 time.sleep(1.1)
 
@@ -135,7 +155,6 @@ for ws in ss.worksheets():
 
     # --- honor per-sheet throttle -------------------------------------------
     time.sleep(SHEET_DELAY_SECS)
-
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 5. SUMMARY
